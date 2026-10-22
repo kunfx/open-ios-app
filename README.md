@@ -215,10 +215,13 @@ open ResourceApp.xcodeproj
 
 ### 云端构建未签名 IPA（GitHub Actions）
 
-1. 把整个 `ios-app/` 放到仓库根目录（与 `app/`、`routes/` 同级）。
+1. 把整个 `ios-app/` 放到仓库根目录（与 `app/`、`routes/` 同级），至少要有 `project.yml` 和 `ResourceApp/` 源码目录。
 2. 把 `ios-app/.github/workflows/ios-unsigned-ipa.yml` 复制到仓库根目录的 `.github/workflows/`。
 3. push 到 `main`/`master`，或在 Actions 页面手动 **Run workflow**。
 4. 构建完成后在 Artifacts 下载 `ResourceApp-unsigned-ipa-<构建号>`。
+
+> 工作流会自动查找 `project.yml`，所以 `ios-app/ios/project.yml`、`ios/project.yml`、根目录 `project.yml` 三种结构都能构建。
+> 如果报 `working directory ... No such file or directory`，说明仓库里没有上传 iOS 源码，或 `project.yml` 不在上述位置；重新上传 `ios-app/ios` 整个目录后再运行即可。
 
 工作流做的事：`xcodegen generate` → `xcodebuild -sdk iphoneos CODE_SIGNING_ALLOWED=NO` → 打包 `Payload/ResourceApp.app` → `zip` 成 `.ipa`。
 
@@ -276,6 +279,7 @@ ios/ResourceApp/
 | App 提示“网络连接失败” | 检查服务器地址是否需要 `https`、证书是否有效；App 已开启 ATS 任意加载但仍建议用 HTTPS |
 | 消息列表为空 | 接口会自动在 `notifications` / `user_notifications` 中选择“当前用户有数据”的那张表；两表都为空时属正常 |
 | 签到 500 | 确认 `user_sign_ins` 表存在（网站签到功能已在用） |
+| Actions 报 `future Xcode project file format (77)` | CI 的 Xcode 15 打不开 Xcode 16 工程格式；`project.yml` 已固定 `projectFormat: xcode15_3`，若改回默认需把 runner 换成 `macos-15` |
 
 ---
 
