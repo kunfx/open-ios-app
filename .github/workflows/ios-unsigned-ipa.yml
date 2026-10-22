@@ -1,0 +1,122 @@
+name: Build unsigned iOS IPA
+
+# 复制位置：<你的仓库根目录>/.github/workflows/ios-unsigned-ipa.yml
+# 前提：整个 ios-app 目录放在仓库根目录下（与 app/、routes/ 同级）。
+# 产物：ResourceApp-unsigned.ipa（未签名，需要自行用 Sideloadly / AltStore / 企业证书签名安装）
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: "可选：手动指定构建号（默认使用 run_number）"
+        required: false
+        default: ""
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "ios-app/ios/**"
+      - ".github/workflows/ios-unsigned-ipa.yml"
+
+concurrency:
+  group: ios-unsigned-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build unsigned .ipa
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    env:
+      PROJECT_DIR: ios-app/ios
+      SCHEME: ResourceApp
+      APP_NAME: ResourceApp
+      BUNDLE_ID: com.appku.top
+      BUILD_NUMBER: ${{ github.event.inputs.build_number || github.run_number }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Install XcodeGen
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+
+      - name: Generate Xcode project
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          xcodegen generate --spec project.yml
+          ls -la
+
+      - name: Build (Release, unsigned)
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project "${SCHEME}.xcodeproj" \
+            -scheme "${SCHEME}" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath build \
+            MARKETING_VERSION="1.0.0" \
+            CURRENT_PROJECT_VERSION="${BUILD_NUMBER}" \
+            PRODUCT_BUNDLE_IDENTIFIER="${BUNDLE_ID}" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            ENABLE_BITCODE=NO \
+            ONLY_ACTIVE_ARCH=NO \
+            clean build | tee build.log
+
+      - name: Package unsigned .ipa
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -euo pipefail
+
+          APP_PATH="build/Build/Products/Release-iphoneos/${APP_NAME}.app"
+
+          if [ ! -d "${APP_PATH}" ]; then
+            echo "未找到构建产物：${APP_PATH}"
+            find build/Build/Products -maxdepth 3 -name "*.app" -print || true
+            exit 1
+          fi
+
+          rm -rf Payload "${APP_NAME}-unsigned.ipa"
+          mkdir -p Payload
+          cp -R "${APP_PATH}" "Payload/${APP_NAME}.app"
+
+          # 未签名包不应该携带签名文件，避免签名工具误判
+          rm -rf "Payload/${APP_NAME}.app/_CodeSignature" || true
+          rm -f "Payload/${APP_NAME}.app/embedded.mobileprovision" || true
+
+          zip -qry "${APP_NAME}-unsigned.ipa" Payload
+
+          ls -lh "${APP_NAME}-unsigned.ipa"
+          echo "IPA=${PWD}/${APP_NAME}-unsigned.ipa" >> "$GITHUB_ENV"
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ResourceApp-unsigned-ipa-${{ env.BUILD_NUMBER }}
+          path: ${{ env.PROJECT_DIR }}/${{ env.APP_NAME }}-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ env.BUILD_NUMBER }}
+          path: ${{ env.PROJECT_DIR }}/build.log
+          if-no-files-found: ignore
+          retention-days: 7

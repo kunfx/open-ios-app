@@ -1,0 +1,17 @@
+# macOS / Xcode
+.DS_Store
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# XcodeGen 生成物（由 project.yml 还原，不入库）
+ios/ResourceApp.xcodeproj/
+
+# 构建产物
+*.ipa
+*.dSYM.zip
+Payload/
+
+# 日志
+*.log
