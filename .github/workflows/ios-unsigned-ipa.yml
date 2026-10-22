@@ -1,8 +1,12 @@
 name: Build unsigned iOS IPA
 
-# 复制位置：<你的仓库根目录>/.github/workflows/ios-unsigned-ipa.yml
-# 前提：整个 ios-app 目录放在仓库根目录下（与 app/、routes/ 同级）。
-# 产物：ResourceApp-unsigned.ipa（未签名，需要自行用 Sideloadly / AltStore / 企业证书签名安装）
+# 这个文件需要放在仓库根目录的 .github/workflows/ 下：
+#   <仓库根>/.github/workflows/ios-unsigned-ipa.yml
+#
+# 工作流会自动寻找仓库里的 project.yml（无论它是
+#   ios-app/ios/project.yml、ios/project.yml 还是根目录的 project.yml），
+# 然后生成 Xcode 工程并构建未签名 IPA。
+# 产物：ResourceApp-unsigned.ipa（需要自行用 Sideloadly / AltStore / TrollStore / 企业证书签名安装）
 
 on:
   workflow_dispatch:
@@ -16,8 +20,10 @@ on:
       - main
       - master
     paths:
-      - "ios-app/ios/**"
-      - ".github/workflows/ios-unsigned-ipa.yml"
+      - "**/*.swift"
+      - "**/project.yml"
+      - "**/Assets.xcassets/**"
+      - ".github/workflows/**"
 
 concurrency:
   group: ios-unsigned-${{ github.ref }}
@@ -30,7 +36,6 @@ jobs:
     timeout-minutes: 45
 
     env:
-      PROJECT_DIR: ios-app/ios
       SCHEME: ResourceApp
       APP_NAME: ResourceApp
       BUNDLE_ID: com.appku.top
@@ -39,6 +44,43 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Locate iOS project
+        run: |
+          set -euo pipefail
+
+          SPEC=""
+          while IFS= read -r candidate; do
+            dir="$(dirname "$candidate")"
+            if [ -d "$dir/ResourceApp" ]; then
+              SPEC="$candidate"
+              break
+            fi
+          done < <(find . -name project.yml -not -path './.git/*' -print)
+
+          if [ -z "$SPEC" ]; then
+            SPEC="$(find . -name project.yml -not -path './.git/*' -print -quit)"
+          fi
+
+          if [ -z "$SPEC" ]; then
+            echo "::error::仓库里找不到 project.yml。请把 ios-app/ios 目录（包含 project.yml 和 ResourceApp 文件夹）上传到仓库。"
+            echo ""
+            echo "当前仓库文件（最多 120 项）："
+            find . -maxdepth 3 -not -path './.git*' -print | sort | head -n 120
+            exit 1
+          fi
+
+          PROJECT_DIR="$(dirname "$SPEC")"
+
+          if [ ! -d "$PROJECT_DIR/ResourceApp" ]; then
+            echo "::error::$PROJECT_DIR 下缺少 ResourceApp 源码目录，请检查上传的文件结构。"
+            find . -maxdepth 3 -not -path './.git*' -print | sort | head -n 120
+            exit 1
+          fi
+
+          echo "找到工程配置：$SPEC"
+          echo "工程目录：$PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Show toolchain
         run: |
@@ -53,15 +95,16 @@ jobs:
           xcodegen --version
 
       - name: Generate Xcode project
-        working-directory: ${{ env.PROJECT_DIR }}
         run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
           xcodegen generate --spec project.yml
           ls -la
 
       - name: Build (Release, unsigned)
-        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -o pipefail
+          cd "$PROJECT_DIR"
           xcodebuild \
             -project "${SCHEME}.xcodeproj" \
             -scheme "${SCHEME}" \
@@ -76,12 +119,12 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             ENABLE_BITCODE=NO \
             ONLY_ACTIVE_ARCH=NO \
-            clean build | tee build.log
+            clean build 2>&1 | tee build.log
 
       - name: Package unsigned .ipa
-        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
+          cd "$PROJECT_DIR"
 
           APP_PATH="build/Build/Products/Release-iphoneos/${APP_NAME}.app"
 
@@ -102,13 +145,13 @@ jobs:
           zip -qry "${APP_NAME}-unsigned.ipa" Payload
 
           ls -lh "${APP_NAME}-unsigned.ipa"
-          echo "IPA=${PWD}/${APP_NAME}-unsigned.ipa" >> "$GITHUB_ENV"
+          echo "IPA_PATH=${PWD}/${APP_NAME}-unsigned.ipa" >> "$GITHUB_ENV"
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
           name: ResourceApp-unsigned-ipa-${{ env.BUILD_NUMBER }}
-          path: ${{ env.PROJECT_DIR }}/${{ env.APP_NAME }}-unsigned.ipa
+          path: "**/ResourceApp-unsigned.ipa"
           if-no-files-found: error
           retention-days: 30
 
@@ -117,6 +160,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-log-${{ env.BUILD_NUMBER }}
-          path: ${{ env.PROJECT_DIR }}/build.log
+          path: "**/build.log"
           if-no-files-found: ignore
           retention-days: 7
